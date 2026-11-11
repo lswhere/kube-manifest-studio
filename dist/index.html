@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Kube Manifest Studio</title>
+<style>
+[hidden]{display:none!important}*{box-sizing:border-box}body{margin:0;background:#f0f4fa;color:#18263e;font:15px system-ui,sans-serif}header{background:#142540;color:#fff;padding:20px max(24px,calc((100% - 1100px)/2));white-space:nowrap;font-weight:700;letter-spacing:.06em}header span{color:#83aaff}main{max-width:1148px;margin:auto;padding:42px 24px}.eyebrow{color:#2359bc;font:700 13px monospace;letter-spacing:.14em}h1{font-size:clamp(28px,5vw,44px);margin:8px 0}p{color:#51617a;margin:0 0 28px}.grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.25fr);gap:20px}section{background:white;border:1px solid #d7e0ee;border-radius:16px;padding:22px;min-width:0}h2{font-size:18px;margin:0 0 18px}.fields{display:grid;grid-template-columns:1fr 1fr;gap:14px}.wide{grid-column:1/-1}label{display:block;font-weight:600;font-size:13px}input,select{display:block;width:100%;border:1px solid #bfcde0;border-radius:8px;padding:10px;margin-top:6px;background:#fff;color:#18263e;font:inherit}button{border:1px solid #bfcde0;border-radius:8px;background:white;color:#18263e;padding:8px 12px;font:inherit;cursor:pointer}button[aria-pressed=true]{background:#2359bc;color:white;border-color:#2359bc}button:disabled{opacity:.55;cursor:default}.bar{display:flex;flex-wrap:wrap;gap:8px}textarea{width:100%;height:410px;resize:vertical;margin-top:12px;background:#111e32;color:#d4e5ff;border:0;border-radius:10px;padding:16px;font:14px/1.55 monospace;font-variant-ligatures:none}#status{min-height:1.5em;margin:8px 0 0;color:#8b3030}@media(max-width:760px){.grid{grid-template-columns:1fr}}
+</style>
+<header><span>◈</span> KUBE MANIFEST STUDIO</header>
+<main><div class="eyebrow">KUBERNETES / WORKBENCH</div><h1>Kubernetes 清单生成器</h1><p>填写应用配置，实时生成 YAML 和配套 kubectl 命令。</p>
+<div class="grid"><section><h2>01 · 应用配置</h2><form id="form" class="fields">
+<label class="wide">控制器<select name="kind"><option>Deployment</option><option>ReplicaSet</option><option>StatefulSet</option><option>DaemonSet</option><option>Job</option><option>CronJob</option></select></label>
+<label class="wide" hidden>执行命令（容器需提供 /bin/sh）<input name="task" value="echo Hello from Kubernetes"></label>
+<label class="wide" hidden>Cron 调度表达式<input name="schedule" value="*/5 * * * *" required></label>
+<p class="wide" id="stateful-note" hidden>StatefulSet 会同时生成用于 Pod 网络标识的 Headless Service。</p>
+<label>应用名称<input name="app" required maxlength="63" value="web"></label>
+<label>命名空间<input name="ns" required maxlength="63" value="default"></label>
+<label class="wide">容器镜像<input name="image" required value="nginx:1.27-alpine"></label>
+<label>副本数<input name="replicas" type="number" required min="0" max="2147483647" value="2"></label>
+<label>容器端口<input name="target" type="number" required min="1" max="65535" value="80"></label>
+<label>Service 类型<select name="service"><option value="">不生成额外 Service</option><option selected>ClusterIP</option><option>NodePort</option><option>LoadBalancer</option></select></label>
+<label>Service 端口<input name="port" type="number" required min="1" max="65535" value="80"></label>
+<label class="wide">存储卷<select name="volume">
+  <option value="">不挂载</option>
+  <optgroup label="临时与配置卷">
+    <option value="emptyDir">emptyDir（Pod 临时存储）</option>
+    <option value="configMap">ConfigMap（只读配置）</option>
+  </optgroup>
+  <optgroup label="持久卷">
+    <option value="pv">创建静态 PV 和绑定的 PVC</option>
+    <option value="pvc">引用同命名空间的 PVC</option>
+    <option value="claim" hidden disabled>为 StatefulSet 的每个 Pod 创建 PVC</option>
+  </optgroup>
+</select></label>
+<label hidden>卷名称<input name="volumeName" value="data" maxlength="63" required></label>
+<label hidden>容器挂载路径<input name="mountPath" value="/data" required></label>
+<label class="wide" hidden>现有 PVC 名称<input name="claimName" maxlength="253" required></label>
+<label class="wide" hidden>现有 ConfigMap 名称<input name="configMapName" maxlength="253" required></label>
+<label hidden>每个 Pod 的容量（Gi）<input name="storageSize" type="number" value="10" min="1" max="1048576" required></label>
+<label hidden>PV 名称<input name="pvName" maxlength="253" required></label>
+<label hidden>新 PVC 名称<input name="pvClaim" maxlength="253" required></label>
+<label hidden>底层存储类型<select name="pvType"><option value="nfs">NFS</option><option value="local">节点本地存储</option></select></label>
+<label hidden><span id="pv-host-label">NFS 主机地址</span><input name="pvHost" maxlength="253" required></label>
+<label class="wide" hidden>底层存储路径<input name="pvPath" placeholder="/exports/data" required></label>
+<label hidden>容量（Gi）<input name="pvSize" type="number" value="10" min="1" max="1048576" required></label>
+<label hidden>访问模式<select name="pvAccess"><option>ReadWriteOnce</option><option>ReadOnlyMany</option><option>ReadWriteMany</option></select></label>
+</form></section>
+<section><h2>02 · 生成结果</h2><div class="bar"><button id="yaml" aria-pressed="true">YAML</button><button id="commands" aria-pressed="false">kubectl 命令</button><button id="copy">复制</button><button id="save">下载 YAML</button></div><textarea id="output" aria-label="生成结果" readonly spellcheck="false" wrap="off"></textarea><p id="status" role="status"></p></section></div></main>
+<script>
+const get = id => document.getElementById(id);
+const form = get('form');
+let mode = 'yaml';
+let manifest = '';
+const fieldNotes = {
+  "apiVersion": "资源使用的 Kubernetes API 组和版本",
+  "kind": "资源类型",
+  "metadata": "资源或 Pod 模板的元数据",
+  "name": "资源、容器或存储卷的名称",
+  "namespace": "资源所属的命名空间",
+  "spec": "资源或模板的期望配置",
+  "replicas": "期望运行的 Pod 副本数",
+  "serviceName": "为 StatefulSet 的 Pod 提供稳定网络标识的 Service 名称",
+  "selector": "用于匹配 Pod 的标签条件",
+  "matchLabels": "Pod 必须满足的键值标签",
+  "app": "应用标识，用于标记或匹配 Pod",
+  "template": "创建 Pod 时使用的模板",
+  "labels": "添加到 Pod 的标签",
+  "restartPolicy": "容器退出后的重启策略",
+  "containers": "Pod 内的容器列表",
+  "image": "容器运行时使用的镜像",
+  "ports": "声明的容器端口或 Service 端口列表",
+  "containerPort": "容器内应用监听的端口",
+  "command": "覆盖镜像默认入口的命令及参数",
+  "schedule": "触发任务的 Cron 表达式",
+  "jobTemplate": "每次调度时创建 Job 所用的模板",
+  "type": "Service 的访问方式",
+  "clusterIP": "None 表示不分配虚拟 IP，直接解析到后端 Pod",
+  "port": "Service 提供的访问端口",
+  "volumeMounts": "容器的存储卷挂载列表",
+  "mountPath": "容器内的挂载路径",
+  "volumes": "Pod 使用的存储卷及其来源",
+  "emptyDir": "随 Pod 创建和删除的临时存储",
+  "persistentVolumeClaim": "将同命名空间中的 PVC 用作存储卷",
+  "configMap": "将同命名空间中的 ConfigMap 键值挂载为只读文件",
+  "readOnly": "以只读方式挂载存储卷",
+  "claimName": "要挂载的现有 PVC 名称",
+  "volumeClaimTemplates": "为每个 StatefulSet Pod 创建独立 PVC 的模板",
+  "accessModes": "PVC 请求的访问模式",
+  "resources": "PVC 的资源配置",
+  "requests": "PVC 请求的资源量",
+  "storage": "每个 PVC 请求的存储容量",
+  "capacity": "PV 提供的存储容量",
+  "persistentVolumeReclaimPolicy": "PVC 删除后如何处理 PV 和底层数据",
+  "storageClassName": "空字符串表示不使用 StorageClass",
+  "claimRef": "预留此 PV 给指定命名空间中的 PVC",
+  "volumeName": "PVC 绑定的静态 PV 名称",
+  "nfs": "NFS 存储后端",
+  "server": "NFS 服务器的主机名或 IP 地址",
+  "path": "NFS 导出路径或节点本地存储路径",
+  "local": "节点本地存储后端",
+  "nodeAffinity": "将使用该 PV 的 Pod 限制在存储所在节点",
+  "required": "调度必须满足的节点条件",
+  "nodeSelectorTerms": "可匹配的节点条件组",
+  "matchExpressions": "节点标签匹配规则",
+  "key": "匹配的节点标签键",
+  "operator": "标签匹配运算符",
+  "values": "允许匹配的节点标签值",
+  "targetPort": "Service 流量转发到的 Pod 端口"
+};
+function yamlLineWidth(line) {
+  let width = 0;
+  for (const character of line) {
+    if (/\p{Mark}/u.test(character)) continue;
+    width += /[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe10-\ufe6f\uff01-\uff60\uffe0-\uffe6]|\p{Extended_Pictographic}/u.test(character) ? 2 : 1;
+  }
+  return width;
+}
+function annotateYamlLine(line, commentColumn) {
+  const field = line.match(/^\s*(?:- )?(\w+):/)?.[1];
+  return field && Object.hasOwn(fieldNotes, field) ? line + ' '.repeat(commentColumn - yamlLineWidth(line)) + '# ' + fieldNotes[field] : line;
+}
+function showField(field, visible) {
+  field.disabled = !visible;
+  field.closest('label').hidden = !visible;
+}
+function validIpv6(address) {
+  try {
+    return Boolean(new URL('http://[' + address + ']').hostname);
+  } catch {
+    return false;
+  }
+}
+function render() {
+  const fields = form.elements;
+  const kind = fields.kind.value;
+  const cron = kind === 'CronJob';
+  const batch = cron || kind === 'Job';
+  const stateful = kind === 'StatefulSet';
+  const scaled = !batch && kind !== 'DaemonSet';
+  showField(fields.replicas, scaled);
+  showField(fields.target, !batch);
+  showField(fields.service, !batch);
+  showField(fields.port, !batch && Boolean(fields.service.value));
+  showField(fields.task, batch);
+  showField(fields.schedule, cron);
+  const claimOption = fields.volume.querySelector('[value="claim"]');
+  claimOption.hidden = claimOption.disabled = !stateful;
+  if (!stateful && fields.volume.value === 'claim') fields.volume.value = '';
+  const volume = fields.volume.value;
+  const staticPv = volume === 'pv';
+  const localPv = fields.pvType.value === 'local';
+  for (const field of ['pvName', 'pvClaim', 'pvType', 'pvHost', 'pvPath', 'pvSize', 'pvAccess']) {
+    showField(fields[field], staticPv);
+  }
+  for (const option of fields.pvAccess.options) {
+    option.disabled = localPv && option.value !== 'ReadWriteOnce';
+  }
+  if (localPv) fields.pvAccess.value = 'ReadWriteOnce';
+  get('pv-host-label').textContent = localPv ? '节点的 kubernetes.io/hostname 标签值' : 'NFS 主机地址';
+  showField(fields.volumeName, Boolean(volume));
+  showField(fields.mountPath, Boolean(volume));
+  showField(fields.configMapName, volume === 'configMap');
+  showField(fields.claimName, volume === 'pvc');
+  showField(fields.storageSize, volume === 'claim');
+  get('stateful-note').hidden = !stateful;
+
+  const {app, ns, image, replicas, target, service, port, task, schedule, volumeName, mountPath, claimName, storageSize, configMapName, pvName, pvClaim, pvHost, pvPath, pvSize, pvAccess} =
+    Object.fromEntries(new FormData(form));
+  const dns = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+  const cronFields = /^[0-9*/,\-]+(?:\s+[0-9*/,\-]+){4}$/;
+  let error = '';
+  if (!form.checkValidity() || !dns.test(app) || !dns.test(ns) ||
+      !/^[a-zA-Z0-9][a-zA-Z0-9._:/@-]*$/.test(image)) {
+    error = '请检查名称、镜像和数字范围。';
+  } else if ((service || stateful) && !/^[a-z]/.test(app)) {
+    error = '生成 Service 时，应用名称须以小写字母开头。';
+  } else if ((cron && app.length > 52) || (stateful && service && app.length > 54)) {
+    error = cron ? 'CronJob 名称最多 52 个字符。' : '生成额外 Service 时，StatefulSet 名称最多 54 个字符。';
+  } else if (cron && !cronFields.test(schedule.trim())) {
+    error = '请输入五段式数字 Cron 表达式，例如 */5 * * * *。';
+  }
+  if (!error && volume && (!dns.test(volumeName) || !/^\/[^:\x00-\x1f]*$/.test(mountPath))) {
+    error = '请使用合法的卷名称和以 / 开头的绝对路径，路径中不能包含冒号。';
+  }
+  if (!error && volume === 'pvc' && !claimName.split('.').every(part => dns.test(part))) {
+    error = '请输入有效的 PVC 名称。';
+  }
+  if (!error && volume === 'configMap' && !configMapName.split('.').every(part => dns.test(part))) {
+    error = '请输入有效的 ConfigMap 名称。';
+  }
+  if (!error && staticPv) {
+    const dnsName = value => value.split('.').every(part => dns.test(part));
+    const hostValid = localPv
+      ? pvHost.length <= 63 && /^[a-z0-9](?:[a-z0-9_.-]*[a-z0-9])?$/i.test(pvHost)
+      : dnsName(pvHost) || (/^[0-9a-f:.]+$/i.test(pvHost) && pvHost.includes(':') && validIpv6(pvHost));
+    if (!dnsName(pvName) || !dnsName(pvClaim) || !hostValid || !/^\/[^\x00-\x1f]*$/.test(pvPath)) {
+      error = '请检查 PV/PVC 名称、存储主机和以 / 开头的底层存储路径。';
+    }
+  }
+  get('copy').disabled = get('save').disabled = Boolean(error);
+  get('status').textContent = error;
+  if (error) {
+    manifest = get('output').value = '';
+    return;
+  }
+
+  const quote = JSON.stringify;
+  const metadata = name => ['metadata:', '  name: ' + quote(name), '  namespace: ' + quote(ns)];
+  const indent = (lines, spaces) => lines.map(line => ' '.repeat(spaces) + line);
+  const template = [
+    'template:', '  metadata:', '    labels:', '      app: ' + quote(app),
+    '  spec:', ...(batch ? ['    restartPolicy: Never'] : []),
+    '    containers:', '      - name: ' + quote(app), '        image: ' + quote(image)
+  ];
+  if (!batch) template.push('        ports:', '          - containerPort: ' + Number(target));
+  if (task?.trim()) template.push('        command: ' + quote(['/bin/sh', '-c', task]));
+  if (volume) {
+    template.push('        volumeMounts:', '          - name: ' + quote(volumeName),
+      '            mountPath: ' + quote(mountPath));
+    if (volume === 'configMap' || pvAccess === 'ReadOnlyMany') template.push('            readOnly: true');
+    if (volume !== 'claim') {
+      template.push('    volumes:', '      - name: ' + quote(volumeName));
+      if (volume === 'emptyDir') {
+        template.push('        emptyDir: {}');
+      } else if (volume === 'configMap') {
+        template.push('        configMap:', '          name: ' + quote(configMapName));
+      } else {
+        template.push('        persistentVolumeClaim:', '          claimName: ' + quote(staticPv ? pvClaim : claimName));
+      }
+    }
+  }
+  const governing = service ? app + '-headless' : app;
+  const spec = [];
+  if (scaled) spec.push('replicas: ' + Number(replicas));
+  if (stateful) spec.push('serviceName: ' + quote(governing));
+  if (!batch) spec.push('selector:', '  matchLabels:', '    app: ' + quote(app));
+  if (cron) {
+    spec.push('schedule: ' + quote(schedule.trim()), 'jobTemplate:', '  spec:', ...indent(template, 4));
+  } else {
+    spec.push(...template);
+  }
+  if (volume === 'claim') {
+    spec.push('volumeClaimTemplates:', '  - metadata:', '      name: ' + quote(volumeName),
+      '    spec:', '      accessModes: [ReadWriteOnce]', '      resources:', '        requests:',
+      '          storage: ' + quote(Number(storageSize) + 'Gi'));
+  }
+  const workload = [
+    'apiVersion: ' + (batch ? 'batch/v1' : 'apps/v1'), 'kind: ' + kind,
+    ...metadata(app), 'spec:', ...indent(spec, 2)
+  ];
+  const serviceDoc = (name, type, headless, listenPort) => [
+    'apiVersion: v1', 'kind: Service', ...metadata(name), 'spec:',
+    '  type: ' + type, ...(headless ? ['  clusterIP: None'] : []),
+    '  selector:', '    app: ' + quote(app),
+    '  ports:', '    - port: ' + Number(listenPort), '      targetPort: ' + Number(target)
+  ];
+  const docs = [];
+  if (staticPv) {
+    const accessModes = '  accessModes: [' + pvAccess + ']';
+    const storage = 'storage: ' + quote(Number(pvSize) + 'Gi');
+    const backend = localPv ? [
+      '  local:', '    path: ' + quote(pvPath),
+      '  nodeAffinity:', '    required:', '      nodeSelectorTerms:', '        - matchExpressions:',
+      '            - key: kubernetes.io/hostname', '              operator: In',
+      '              values: ' + quote([pvHost])
+    ] : ['  nfs:', '    server: ' + quote(pvHost), '    path: ' + quote(pvPath)];
+    docs.push([
+      'apiVersion: v1', 'kind: PersistentVolume', 'metadata:', '  name: ' + quote(pvName),
+      'spec:', '  capacity:', '    ' + storage, accessModes,
+      '  persistentVolumeReclaimPolicy: Retain', '  storageClassName: ""',
+      '  claimRef:', '    name: ' + quote(pvClaim), '    namespace: ' + quote(ns), ...backend
+    ], [
+      'apiVersion: v1', 'kind: PersistentVolumeClaim', ...metadata(pvClaim),
+      'spec:', accessModes, '  storageClassName: ""', '  volumeName: ' + quote(pvName),
+      '  resources:', '    requests:', '      ' + storage
+    ]);
+  }
+  if (stateful) docs.push(serviceDoc(governing, 'ClusterIP', true, target));
+  docs.push(workload);
+  if (service) docs.push(serviceDoc(app, service, false, port));
+  const commentColumn = Math.max(40, ...docs.flat().map(line => yamlLineWidth(line) + 4));
+  manifest = docs.map(doc => doc.map(line => annotateYamlLine(line, commentColumn)).join('\n')).join('\n---\n') + '\n';
+
+  const filename = app + '.yaml';
+  const kubectl = 'kubectl -n ' + ns;
+  const resource = kind.toLowerCase() + '/' + app;
+  const commands = [
+    '# 将 YAML 下载到当前目录，并确认命名空间已存在',
+    'kubectl get namespace ' + ns,
+    'kubectl apply --dry-run=server -f ' + filename,
+    'kubectl apply -f ' + filename,
+    kubectl + ' get ' + resource
+  ];
+  if (['Deployment', 'StatefulSet', 'DaemonSet'].includes(kind)) {
+    commands.push(kubectl + ' rollout status ' + resource, kubectl + ' logs ' + resource);
+  }
+  if (!batch) commands.push(kubectl + ' get pods -l app=' + app);
+  if (kind === 'Job') commands.push(kubectl + ' logs ' + resource);
+  if (cron) commands.push(kubectl + ' describe ' + resource);
+  if (staticPv) commands.push('kubectl get pv ' + pvName, kubectl + ' get pvc ' + pvClaim);
+  if (stateful) commands.push(kubectl + ' get service ' + governing);
+  if (service) commands.push(kubectl + ' get service ' + app);
+  get('output').value = mode === 'yaml' ? manifest : commands.join('\n') + '\n';
+}
+form.addEventListener('input', event => {
+  if (event.target === form.elements.kind) {
+    const {kind, image} = form.elements;
+    const batch = ['Job', 'CronJob'].includes(kind.value);
+    if (batch && image.value === 'nginx:1.27-alpine') image.value = 'busybox:1.36';
+    if (!batch && image.value === 'busybox:1.36') image.value = 'nginx:1.27-alpine';
+  }
+  render();
+});
+form.addEventListener('submit', event => event.preventDefault());
+for (const id of ['yaml', 'commands']) get(id).onclick = () => {
+  mode = id;
+  for (const tab of ['yaml', 'commands']) get(tab).setAttribute('aria-pressed', tab === id);
+  render();
+};
+get('copy').onclick = async () => {
+  try {
+    await navigator.clipboard.writeText(get('output').value);
+    get('status').textContent = '已复制';
+  } catch {
+    get('output').select();
+    get('status').textContent = '已选中结果，请使用 Ctrl+C 或 ⌘C 复制。';
+  }
+};
+get('save').onclick = () => {
+  const url = URL.createObjectURL(new Blob([manifest], {type:'application/yaml'}));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = form.elements.app.value + '.yaml';
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
+render();
+</script>
+</html>
