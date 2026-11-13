@@ -43,6 +43,13 @@
 <label class="wide" hidden>底层存储路径<input name="pvPath" placeholder="/exports/data" required></label>
 <label hidden>容量（Gi）<input name="pvSize" type="number" value="10" min="1" max="1048576" required></label>
 <label hidden>访问模式<select name="pvAccess"><option>ReadWriteOnce</option><option>ReadOnlyMany</option><option>ReadWriteMany</option></select></label>
+<label class="wide">Ingress<select name="ingress"><option value="">不生成</option><option value="enabled">生成 Ingress（转发到上方 Service）</option></select></label>
+<label hidden>IngressClass 名称<input name="ingressClass" placeholder="留空使用集群默认类" maxlength="253"></label>
+<label hidden>访问域名<input name="ingressHost" value="web.example.com" maxlength="253" required></label>
+<label hidden>请求路径<input name="ingressPath" value="/" required></label>
+<label hidden>路径匹配类型<select name="pathType"><option>Prefix</option><option>Exact</option></select></label>
+<label class="wide" hidden>TLS Secret 名称（可选）<input name="tlsSecret" maxlength="253" placeholder="留空使用 HTTP"></label>
+<p id="ingress-note" class="wide" hidden>集群需已有对应的 Ingress Controller。TLS Secret 需已存在于当前命名空间。</p>
 </form></section>
 <section><h2>02 · 生成结果</h2><div class="bar"><button id="yaml" aria-pressed="true">YAML</button><button id="commands" aria-pressed="false">kubectl 命令</button><button id="copy">复制</button><button id="save">下载 YAML</button></div><textarea id="output" aria-label="生成结果" readonly spellcheck="false" wrap="off"></textarea><p id="status" role="status"></p></section></div></main>
 <script>
@@ -104,6 +111,18 @@ const fieldNotes = {
   "key": "匹配的节点标签键",
   "operator": "标签匹配运算符",
   "values": "允许匹配的节点标签值",
+  "ingressClassName": "处理此 Ingress 的 IngressClass",
+  "rules": "域名和路径的转发规则",
+  "host": "匹配请求域名",
+  "http": "HTTP 路由配置",
+  "paths": "请求路径的匹配规则",
+  "pathType": "Prefix 为路径前缀匹配，Exact 为精确匹配",
+  "backend": "转发请求的后端",
+  "service": "接收请求的同命名空间 Service",
+  "number": "后端 Service 的端口号",
+  "tls": "HTTPS 证书配置",
+  "hosts": "TLS 证书对应的域名",
+  "secretName": "保存 TLS 证书和私钥的 Secret",
   "targetPort": "Service 流量转发到的 Pod 端口"
 };
 function yamlLineWidth(line) {
@@ -142,6 +161,12 @@ function render() {
   showField(fields.port, !batch && Boolean(fields.service.value));
   showField(fields.task, batch);
   showField(fields.schedule, cron);
+  showField(fields.ingress, !batch);
+  const ingressEnabled = !batch && fields.ingress.value === 'enabled';
+  for (const name of ['ingressClass', 'ingressHost', 'ingressPath', 'pathType', 'tlsSecret']) {
+    showField(fields[name], ingressEnabled);
+  }
+  get('ingress-note').hidden = !ingressEnabled;
   const claimOption = fields.volume.querySelector('[value="claim"]');
   claimOption.hidden = claimOption.disabled = !stateful;
   if (!stateful && fields.volume.value === 'claim') fields.volume.value = '';
@@ -163,7 +188,7 @@ function render() {
   showField(fields.storageSize, volume === 'claim');
   get('stateful-note').hidden = !stateful;
 
-  const {app, ns, image, replicas, target, service, port, task, schedule, volumeName, mountPath, claimName, storageSize, configMapName, pvName, pvClaim, pvHost, pvPath, pvSize, pvAccess} =
+  const {app, ns, image, replicas, target, service, port, task, schedule, volumeName, mountPath, claimName, storageSize, configMapName, pvName, pvClaim, pvHost, pvPath, pvSize, pvAccess, ingressClass, ingressHost, ingressPath, pathType, tlsSecret} =
     Object.fromEntries(new FormData(form));
   const dns = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
   const cronFields = /^[0-9*/,\-]+(?:\s+[0-9*/,\-]+){4}$/;
@@ -194,6 +219,15 @@ function render() {
       : dnsName(pvHost) || (/^[0-9a-f:.]+$/i.test(pvHost) && pvHost.includes(':') && validIpv6(pvHost));
     if (!dnsName(pvName) || !dnsName(pvClaim) || !hostValid || !/^\/[^\x00-\x1f]*$/.test(pvPath)) {
       error = '请检查 PV/PVC 名称、存储主机和以 / 开头的底层存储路径。';
+    }
+  }
+  if (!error && ingressEnabled) {
+    const validName = value => value.split('.').every(part => part.length <= 63 && dns.test(part));
+    if (!service) {
+      error = '生成 Ingress 时，请先选择一个 Service 类型。';
+    } else if (!validName(ingressHost) || (ingressClass && !validName(ingressClass)) ||
+        (tlsSecret && !validName(tlsSecret)) || !/^\/[^\s?#\\]*$/.test(ingressPath)) {
+      error = '请检查域名、IngressClass、TLS Secret 和以 / 开头的请求路径。';
     }
   }
   get('copy').disabled = get('save').disabled = Boolean(error);
@@ -277,6 +311,17 @@ function render() {
   if (stateful) docs.push(serviceDoc(governing, 'ClusterIP', true, target));
   docs.push(workload);
   if (service) docs.push(serviceDoc(app, service, false, port));
+  if (ingressEnabled) {
+    docs.push([
+      'apiVersion: networking.k8s.io/v1', 'kind: Ingress', ...metadata(app), 'spec:',
+      ...(ingressClass ? ['  ingressClassName: ' + quote(ingressClass)] : []),
+      ...(tlsSecret ? ['  tls:', '    - hosts: ' + quote([ingressHost]), '      secretName: ' + quote(tlsSecret)] : []),
+      '  rules:', '    - host: ' + quote(ingressHost), '      http:', '        paths:',
+      '          - path: ' + quote(ingressPath), '            pathType: ' + pathType,
+      '            backend:', '              service:', '                name: ' + quote(app),
+      '                port:', '                  number: ' + Number(port)
+    ]);
+  }
   const commentColumn = Math.max(40, ...docs.flat().map(line => yamlLineWidth(line) + 4));
   manifest = docs.map(doc => doc.map(line => annotateYamlLine(line, commentColumn)).join('\n')).join('\n---\n') + '\n';
 
@@ -298,6 +343,7 @@ function render() {
   if (cron) commands.push(kubectl + ' describe ' + resource);
   if (staticPv) commands.push('kubectl get pv ' + pvName, kubectl + ' get pvc ' + pvClaim);
   if (stateful) commands.push(kubectl + ' get service ' + governing);
+  if (ingressEnabled) commands.push(kubectl + ' get ingress ' + app, kubectl + ' describe ingress ' + app);
   if (service) commands.push(kubectl + ' get service ' + app);
   get('output').value = mode === 'yaml' ? manifest : commands.join('\n') + '\n';
 }
