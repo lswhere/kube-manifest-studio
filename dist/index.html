@@ -51,7 +51,18 @@
 <label class="wide" hidden>TLS Secret 名称（可选）<input name="tlsSecret" maxlength="253" placeholder="留空使用 HTTP"></label>
 <p id="ingress-note" class="wide" hidden>集群需已有对应的 Ingress Controller。TLS Secret 需已存在于当前命名空间。</p>
 </form></section>
-<section><h2>02 · 生成结果</h2><div class="bar"><button id="yaml" aria-pressed="true">YAML</button><button id="commands" aria-pressed="false">kubectl 命令</button><button id="copy">复制</button><button id="save">下载 YAML</button></div><textarea id="output" aria-label="生成结果" readonly spellcheck="false" wrap="off"></textarea><p id="status" role="status"></p></section></div></main>
+<section><h2>02 · 生成结果</h2><div class="bar"><button id="yaml" aria-pressed="true">YAML</button><button id="commands" aria-pressed="false">kubectl 命令</button><button id="copy">复制</button><button id="save">下载 YAML</button></div><textarea id="output" aria-label="生成结果" readonly spellcheck="false" wrap="off"></textarea><p id="status" role="status"></p></section></div>
+<section id="query-module" style="margin-top:20px">
+<h2>03 · 常用查询命令</h2>
+<div class="bar" role="tablist" aria-label="查询命令分类">
+<button type="button" class="query-tab" data-group="controllers" aria-pressed="true">控制器</button>
+<button type="button" class="query-tab" data-group="services" aria-pressed="false">Service</button>
+<button type="button" class="query-tab" data-group="storage" aria-pressed="false">存储</button>
+</div>
+<div id="query-list" style="display:grid;gap:8px;margin-top:14px"></div>
+<p id="query-status" role="status"></p>
+</section>
+</main>
 <script>
 const get = id => document.getElementById(id);
 const form = get('form');
@@ -380,5 +391,70 @@ get('save').onclick = () => {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
 render();
+const queryGroups = {
+  controllers: [
+    ['查看控制器', 'kubectl -n {ns} get deployment,replicaset,statefulset,daemonset,job,cronjob'],
+    ['查看 Pod 与标签', 'kubectl -n {ns} get pods -o wide --show-labels'],
+    ['查看应用详情', 'kubectl -n {ns} describe deployment/{app}'],
+    ['查看滚动状态', 'kubectl -n {ns} rollout status deployment/{app}'],
+    ['查看应用日志', 'kubectl -n {ns} logs deployment/{app} --all-pods=true --tail=100'],
+    ['查看事件', 'kubectl -n {ns} get events --sort-by=.lastTimestamp']
+  ],
+  services: [
+    ['查看 Service 与端点', 'kubectl -n {ns} get services,endpoints,endpointslices'],
+    ['查看应用 Service', 'kubectl -n {ns} get service {app} -o wide'],
+    ['查看 Service 详情', 'kubectl -n {ns} describe service/{app}'],
+    ['检查 Service 选择的 Pod', 'kubectl -n {ns} get pods -l app={app} -o wide'],
+    ['查看 Ingress 路由', 'kubectl -n {ns} get ingress -o wide']
+  ],
+  storage: [
+    ['查看 PVC 与 Pod 绑定', 'kubectl -n {ns} get pvc,pv -o wide'],
+    ['查看 PVC 详情', 'kubectl -n {ns} describe pvc'],
+    ['查看存储类', 'kubectl get storageclass'],
+    ['检查 Pod 挂载与事件', 'kubectl -n {ns} describe pods -l app={app}'],
+    ['查看存储相关事件', 'kubectl -n {ns} get events --sort-by=.lastTimestamp']
+  ]
+};
+let queryGroup = 'controllers';
+function renderQueries() {
+  const ns = form.elements.ns.value.trim() || 'default';
+  const app = form.elements.app.value.trim() || 'web';
+  const list = get('query-list');
+  list.replaceChildren();
+  for (const [title, template] of queryGroups[queryGroup]) {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;min-width:0';
+    const code = document.createElement('code');
+    code.textContent = template.replaceAll('{ns}', ns).replaceAll('{app}', app);
+    code.style.cssText = 'flex:1;overflow:auto;padding:10px;background:#f0f4fa;border-radius:8px;font-size:12px';
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.textContent = '复制';
+    copy.setAttribute('aria-label', '复制' + title);
+    copy.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(code.textContent);
+        get('query-status').textContent = '已复制：' + title;
+      } catch {
+        get('query-status').textContent = '浏览器未授权剪贴板，请手动选择命令复制。';
+      }
+    });
+    row.append(code, copy);
+    list.append(row);
+  }
+}
+for (const tab of document.querySelectorAll('.query-tab')) {
+  tab.addEventListener('click', () => {
+    queryGroup = tab.dataset.group;
+    for (const item of document.querySelectorAll('.query-tab')) {
+      item.setAttribute('aria-pressed', String(item === tab));
+    }
+    get('query-status').textContent = '';
+    renderQueries();
+  });
+}
+form.addEventListener('input', renderQueries);
+renderQueries();
+
 </script>
 </html>
